@@ -8,14 +8,11 @@ Created on Thu Apr 26 22:02:06 2018
 
 import numpy as np
 from joblib import Parallel, delayed
-import time
-from copy import copy
+from copy import deepcopy as copy
 
 from scipy import stats
 
 class SurvStats(object):
-    # 3 scenarios: neither (0), branch w/ future removals (1) branch w/ future insertions (2)
-    # removeData should be set for scenario 1 and outcomes should be all; allTimes should be scenario 2
     def __init__(self, outcomes, intervention):
         super().__init__()
         sorter = np.lexsort((1-outcomes[:,0], outcomes[:,1]))
@@ -26,10 +23,9 @@ class SurvStats(object):
         # statistics to track population
         self.times = np.unique(outcomes[outcomes[:,0] == 1,1])
         m = len(self.times)
-        self.nt, self.nc = np.zeros(m, dtype = np.int64), np.zeros(m, dtype = np.int64)
-        self.dt, self.dc = np.zeros(m, dtype = np.int64), np.zeros(m, dtype = np.int64)
+        self.nt, self.nc = np.zeros(m, dtype = np.uint32), np.zeros(m, dtype = np.uint32)
+        self.dt, self.dc = np.zeros(m, dtype = np.uint16), np.zeros(m, dtype = np.uint16)
                 
-        # initialize with current data
         for i in range(m):
             T_index = np.where(T_outcomes[:,1] == self.times[i])[0]
             self.dt[i] = np.sum(T_outcomes[T_index,0])
@@ -48,11 +44,11 @@ class SurvStats(object):
         deathBool = outcomes[:,0] == 1
         numDeaths = np.sum(deathBool)
         if numDeaths == 0:
-            avgDeathTime = outcomes[-1,1]
+            boundaryTime = outcomes[-1,1]
         else:
-            avgDeathTime = np.mean(outcomes[deathBool,1])
+            boundaryTime = np.mean(outcomes[deathBool,1])
         #avgDeathTime = np.minimum(avgDeathTime, 365.25*4)
-        numEffectiveAlive = np.sum(np.minimum(outcomes[np.logical_not(deathBool),1]/avgDeathTime, 1))
+        numEffectiveAlive = np.sum(np.minimum(outcomes[np.logical_not(deathBool),1]/boundaryTime, 1))
         return numDeaths + numEffectiveAlive
         
         
@@ -346,7 +342,7 @@ class Node(object):
     ## sorts a continuous predictor in ascending order for the purpose of linear search for split points
     def returnSorted(self, colIndex):
         ## only to be used for continuous features
-        subData = self.root.data[self.rowIndex,colIndex]
+        subData = self.impute(copy(self.root.data[self.rowIndex,colIndex]))
         sortIndex = np.argsort(subData)
         subData = subData[sortIndex]
         intervention = self.root.intervention[self.rowIndex][sortIndex]
@@ -356,8 +352,18 @@ class Node(object):
     def minSize(self, L_model, R_model):
         return np.min([L_model.totalC, L_model.totalT, R_model.totalC, R_model.totalT])
     
+    def impute(self, data, colIndex):
+        needsImpute = np.isnan(data)
+        finiteVals = data[np.logical_not(needsImpute)]
+        if self.root.columnTypes[colIndex] == 0:
+            val = stats.mode(finiteVals)[0][0]
+        else:
+            val = np.mean(finiteVals)
+        data[needsImpute] = val
+        return data
+    
     def splitBinary(self, colIndex):
-        subData = self.root.data[self.rowIndex,colIndex]
+        subData = self.impute(copy(self.root.data[self.rowIndex,colIndex]))
         intervention = self.root.intervention[self.rowIndex]
         outcomes = self.root.outcomes[self.rowIndex]
     

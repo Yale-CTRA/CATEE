@@ -14,19 +14,16 @@ from copy import copy
 from scipy import stats
 
 class SurvStats(object):
-    # 3 scenarios: neither (0), branch w/ future removals (1) branch w/ future insertions (2)
-    # removeData should be set for scenario 1 and outcomes should be all; allTimes should be scenario 2
     def __init__(self, outcomes, intervention, allTimes = None):
         super().__init__()
-        self.avgEventTime = 605
-
         if allTimes is None:
             allTimes = outcomes[:,1]
+            
         # statistics to track population
         self.times = np.unique(allTimes)
         m = len(self.times)
-        self.nt, self.nc = np.zeros(m, dtype = np.int64), np.zeros(m, dtype = np.int64)
-        self.dt, self.dc = np.zeros(m, dtype = np.int64), np.zeros(m, dtype = np.int64)
+        self.nt, self.nc = np.zeros(m, dtype = np.uint32), np.zeros(m, dtype = np.uint32)
+        self.dt, self.dc = np.zeros(m, dtype = np.uint16), np.zeros(m, dtype = np.uint16)
         self.totalT, self.totalC = 0, 0
                 
         # initialize with current data

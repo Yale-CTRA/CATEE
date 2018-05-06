@@ -8,9 +8,6 @@ Created on Thu Apr 26 04:58:13 2018
 
 import numpy as np
 from joblib import Parallel, delayed
-import time
-from copy import copy
-
 from scipy import stats
 
 class SurvStats(object):
