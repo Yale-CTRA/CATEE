@@ -172,39 +172,39 @@ class RandomForest(object):
                               outcomes) for i in range(self.numTrees))
         self.fitted = True
         
-    def getWeights(self, data, treeNum):
-        results = self.trees[treeNum].predict(data)
-        return results
-    
-    def getITE(self, weights, index):
-        select = weights[index,:] > 0
-        model = SurvStats(self.outcomes[select,:], self.intervention[select], weights[index, select])
-        return model.getRMSTdiff(tau = 7)
-
-    def predict(self, data):
-        assert self.fitted
-        ncores = multiprocessing.cpu_count() - 2
-        weights = Parallel(n_jobs = ncores, backend = 'multiprocessing', verbose = 12)(delayed(self.getWeights)(data, i) 
-                                            for i in range(self.numTrees))
-        weights = np.stack(weights, axis = 2)
-        weights = np.sum(weights, axis = 2)/self.numTrees
-        
-        numRows = len(data)
-        ITE = Parallel(n_jobs = ncores, backend = 'multiprocessing', verbose = 12)(delayed(self.getITE)(weights, i) 
-                                            for i in range(numRows))
-        return np.array(ITE)
-    
+#    def getWeights(self, data, treeNum):
+#        results = self.trees[treeNum].predict(data)
+#        return results
 #    
+#    def getITE(self, weights, index):
+#        select = weights[index,:] > 0
+#        model = SurvStats(self.outcomes[select,:], self.intervention[select], weights[index, select])
+#        return model.getRMSTdiff(tau = 7)
+#
 #    def predict(self, data):
 #        assert self.fitted
-#        numRows = len(data)
-#        allResults = np.zeros((numRows, self.numTrees))
+#        ncores = multiprocessing.cpu_count() - 2
+#        weights = Parallel(n_jobs = ncores, backend = 'multiprocessing', verbose = 12)(delayed(self.getWeights)(data, i) 
+#                                            for i in range(self.numTrees))
+#        weights = np.stack(weights, axis = 2)
+#        weights = np.sum(weights, axis = 2)/self.numTrees
 #        
-#        for i in range(self.numTrees):
-#            results, totals = self.trees[i].predict(data)
-#            allResults[:,i] = results
-#
-#        return np.mean(allResults, axis = 1)
+#        numRows = len(data)
+#        ITE = Parallel(n_jobs = ncores, backend = 'multiprocessing', verbose = 12)(delayed(self.getITE)(weights, i) 
+#                                            for i in range(numRows))
+#        return np.array(ITE)
+    
+    
+    def predict(self, data):
+        assert self.fitted
+        numRows = len(data)
+        allResults = np.zeros((numRows, self.numTrees))
+        
+        for i in range(self.numTrees):
+            results, totals = self.trees[i].predict(data)
+            allResults[:,i] = results
+
+        return np.mean(allResults, axis = 1)
     
     
     def getNumLeaves(self):
@@ -251,23 +251,23 @@ class Root(object):
         ## free memory
         self.data, self.ID, self.intervention, self.outcomes = None, None, None, None
     
-#    def predict(self, data):
-#        self.data = data
-#        self.numRows = len(data)
-#        self.ID = np.arange(self.numRows)
-#        self.results = np.zeros(self.numRows)
-#        self.totals = np.zeros(self.numRows)
-#        self.tree.predict(self.ID)
-#        ## free memory
-#        self.data, self.numRows, self.ID = None, None, None
-#        return self.results, self.totals
-        
     def predict(self, data):
         self.data = data
-        self.ID = np.arange(len(data))
-        self.results = np.zeros((len(data), self.numRows), dtype = np.bool)
+        self.numRows = len(data)
+        self.ID = np.arange(self.numRows)
+        self.results = np.zeros(self.numRows)
+        self.totals = np.zeros(self.numRows)
         self.tree.predict(self.ID)
-        return self.results
+        ## free memory
+        self.data, self.numRows, self.ID = None, None, None
+        return self.results, self.totals
+        
+#    def predict(self, data):
+#        self.data = data
+#        self.ID = np.arange(len(data))
+#        self.results = np.zeros((len(data), self.numRows), dtype = np.bool)
+#        self.tree.predict(self.ID)
+#        return self.results
         
     
     def getNumLeaves(self):
@@ -297,22 +297,22 @@ class Node(object):
         
         self.fit()
     
-#    def predict(self, rowIndex):
-#        if self.isLeaf:
-#            self.root.results[rowIndex] = self.leafValue
-#        else:
-#            L_ID, R_ID = self.splitIDs(rowIndex)
-#            self.leftChild.predict(L_ID)
-#            self.rightChild.predict(R_ID)
-        
     def predict(self, rowIndex):
         if self.isLeaf:
-            for i in range(len(rowIndex)):
-                self.root.results[rowIndex[i],self.leafValue] = True
+            self.root.results[rowIndex] = self.leafValue
         else:
             L_ID, R_ID = self.splitIDs(rowIndex)
             self.leftChild.predict(L_ID)
             self.rightChild.predict(R_ID)
+        
+#    def predict(self, rowIndex):
+#        if self.isLeaf:
+#            for i in range(len(rowIndex)):
+#                self.root.results[rowIndex[i],self.leafValue] = True
+#        else:
+#            L_ID, R_ID = self.splitIDs(rowIndex)
+#            self.leftChild.predict(L_ID)
+#            self.rightChild.predict(R_ID)
             
             
     def countLeaf(self):
@@ -332,12 +332,12 @@ class Node(object):
     
     def makeLeaf(self):
         self.isLeaf = True
-#        outcomes = self.root.outcomes[self.rowIndex,...]
-#        intervention = self.root.intervention[self.rowIndex]
-#        model = SurvStats(outcomes, intervention)
-        self.leafValue = self.rowIndex
-#        self.leafValue = model.getRMSTdiff(7)
-#        self.leafTotal = model.totalC + model.totalT
+        outcomes = self.root.outcomes[self.rowIndex,...]
+        intervention = self.root.intervention[self.rowIndex]
+        model = SurvStats(outcomes, intervention)
+#        self.leafValue = self.rowIndex
+        self.leafValue = model.getRMSTdiff(7)
+        self.leafTotal = model.totalC + model.totalT
         
     
     def fit(self):
