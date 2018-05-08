@@ -8,35 +8,68 @@ Created on Thu Apr 26 22:02:06 2018
 
 import numpy as np
 from joblib import Parallel, delayed
+import multiprocessing
+
 from copy import deepcopy as copy
 
 from scipy import stats
 
+def getRMST(times, n, d, c, tau):
+    select = np.logical_and(n > 0, times <= tau)
+    times, n, d, c = times[select], n[select], d[select], c[select]
+    
+    # check if anybody died before tau in this population
+    if np.any(select):
+        w = (n-c)/n
+        S = np.cumprod(w*(1 - d/n))
+        deltas = times[1:] - times[:-1]
+        # add first and last rectangles separately
+        area = np.sum(S[:-1]*deltas) + times[0] + S[-1]*(tau - times[-1])
+    else:
+        area = tau
+    return area
+
 class SurvStats(object):
-    def __init__(self, outcomes, intervention):
+    def __init__(self, outcomes, intervention, weights = None):
         super().__init__()
+        if weights is None:
+            weights = np.ones(len(outcomes))
         sorter = np.lexsort((1-outcomes[:,0], outcomes[:,1]))
-        outcomes, intervention = outcomes[sorter,...], intervention[sorter]
-        T_outcomes = outcomes[intervention,...]
-        C_outcomes = outcomes[np.logical_not(intervention)]
+        outcomes, intervention, weights = outcomes[sorter,...], intervention[sorter], weights[sorter]
+        T_outcomes, T_weights = outcomes[intervention,...], weights[intervention]
+        C_outcomes, C_weights = outcomes[np.logical_not(intervention)], weights[np.logical_not(intervention)]
+        
+        self.m_t, self.m_c = np.sum(T_weights), np.sum(C_weights)
 
         # statistics to track population
-        self.times = np.unique(outcomes[outcomes[:,0] == 1,1])
+        self.times = np.unique(outcomes[:,1])
         m = len(self.times)
-        self.nt, self.nc = np.zeros(m, dtype = np.uint32), np.zeros(m, dtype = np.uint32)
-        self.dt, self.dc = np.zeros(m, dtype = np.uint16), np.zeros(m, dtype = np.uint16)
+        self.nt, self.nc = np.zeros(m, dtype = np.float32), np.zeros(m, dtype = np.float32)
+        self.dt, self.dc = np.zeros(m, dtype = np.float32), np.zeros(m, dtype = np.float32)
+        self.ct, self.cc = np.zeros(m, dtype = np.float32), np.zeros(m, dtype = np.float32)
                 
         for i in range(m):
             T_index = np.where(T_outcomes[:,1] == self.times[i])[0]
-            self.dt[i] = np.sum(T_outcomes[T_index,0])
-            self.nt[i] = np.sum(T_outcomes[:,1] >= self.times[i])
+            self.dt[i] = np.sum(T_outcomes[T_index,0]*T_weights[T_index])
+            self.ct[i] = np.sum((1-T_outcomes[T_index,0])*T_weights[T_index])
+            select = T_outcomes[:,1] >= self.times[i]
+            self.nt[i] = np.sum(T_weights[select])
+            
             C_index = np.where(C_outcomes[:,1] == self.times[i])[0]
-            self.dc[i] = np.sum(C_outcomes[C_index,0])
-            self.nc[i] = np.sum(C_outcomes[:,1] >= self.times[i])
-          
-        
-        self.totalT = self.getTotal(T_outcomes)
-        self.totalC = self.getTotal(C_outcomes)
+            self.cc[i] = np.sum((1-C_outcomes[C_index,0])*C_weights[C_index])
+            self.dc[i] = np.sum(C_outcomes[C_index,0]*C_weights[C_index])
+            select = C_outcomes[:,1] >= self.times[i]
+            self.nc[i] = np.sum(C_weights[select])
+            
+            
+        if len(T_outcomes) > 0:
+            self.deathsT, self.totalT = self.getTotal(T_outcomes)
+        else:
+            self.deathsT, self.totalT = 0, 0
+        if len(C_outcomes) > 0:
+            self.deathsC, self.totalC = self.getTotal(C_outcomes)
+        else:
+            self.deathsC, self.totalC = 0, 0
 
 
     def getTotal(self, outcomes):
@@ -49,9 +82,16 @@ class SurvStats(object):
             boundaryTime = np.mean(outcomes[deathBool,1])
         #avgDeathTime = np.minimum(avgDeathTime, 365.25*4)
         numEffectiveAlive = np.sum(np.minimum(outcomes[np.logical_not(deathBool),1]/boundaryTime, 1))
-        return numDeaths + numEffectiveAlive
+        return numDeaths, numDeaths + numEffectiveAlive
+    
         
         
+    def getN(self):
+        return self.nt + self.nc
+    def getD(self):
+        return self.dt + self.dc
+    def getTimes(self):
+        return self.times
     
     def getStatistic(self):
         n = self.nc + self.nt
@@ -86,34 +126,11 @@ class SurvStats(object):
         return pval
 
 
-    def getRMSTdiff(self, tau = 365.25*4):
-        select_T = np.logical_and(self.dt > 0, self.times < tau)
-        select_C = np.logical_and(self.dc > 0, self.times < tau)
-
-        times_T, nt, dt = self.times[select_T], self.nt[select_T], self.dt[select_T]
-        times_C, nc, dc = self.times[select_C], self.nc[select_C], self.dc[select_C]   
-
-        # check if anybody died before tau in this population
-        if np.any(select_T):
-            S = np.cumprod(1 - dt/nt)
-            deltas = times_T[1:] - times_T[:-1]
-            # add first and last rectangles separately
-            area_T = np.sum(S[:-1]*deltas) + times_T[0] + S[-1]*(tau - times_T[-1])
-
-        else:
-            area_T = tau
-            
-        # check if anybody died before tau in this population
-        if np.any(select_C):
-            S = np.cumprod(1 - dc/nc)
-            deltas = times_C[1:] - times_C[:-1]
-            # add first and last rectangles separately
-            area_C = np.sum(S[:-1]*deltas) + times_C[0] + S[-1]*(tau - times_C[-1])
-
-        else:
-            area_C = tau
-            
-        return area_T - area_C
+    def getRMSTdiff(self, tau):
+        areaT = getRMST(self.times, self.nt, self.dt, self.ct, tau = tau)
+        areaC = getRMST(self.times, self.nc, self.dc, self.cc, tau = tau)
+        return areaT - areaC
+    
         
 
 
@@ -138,7 +155,8 @@ class RandomForest(object):
         ## data is predictor float matrix
         ## intervention is boolean array
         ## outcomes is matrix with Y in col 0 and T in col 1
-        numRows, self.numColumns = np.shape(data)
+        self.intervention, self.outcomes = intervention, outcomes
+        self.numRows, self.numColumns = np.shape(data)
         self.recordColumnTypes(data)
         if colNames is not None:
             self.colNames = colNames
@@ -148,25 +166,46 @@ class RandomForest(object):
             verbose = 12
         else:
             verbose = 0
-        self.trees = Parallel(n_jobs = -1, backend = 'multiprocessing', verbose = verbose)(delayed(self.makeTree)(data, intervention, 
+            
+        ncores = multiprocessing.cpu_count() - 2
+        self.trees = Parallel(n_jobs = ncores, backend = 'multiprocessing', verbose = verbose)(delayed(self.makeTree)(data, intervention, 
                               outcomes) for i in range(self.numTrees))
         self.fitted = True
         
+    def getWeights(self, data, treeNum):
+        results = self.trees[treeNum].predict(data)
+        return results
+    
+    def getITE(self, weights, index):
+        select = weights[index,:] > 0
+        model = SurvStats(self.outcomes[select,:], self.intervention[select], weights[index, select])
+        return model.getRMSTdiff(tau = 7)
+
     def predict(self, data):
         assert self.fitted
-        numRows = len(data)
-        allResults = np.zeros((numRows, self.numTrees))
-#        weights = np.zeros((numRows, self.numTrees))
-#        
-        for i in range(self.numTrees):
-            results, totals = self.trees[i].predict(data)
-            allResults[:,i] = results
-#            weights[:,i] = totals
+        ncores = multiprocessing.cpu_count() - 2
+        weights = Parallel(n_jobs = ncores, backend = 'multiprocessing', verbose = 12)(delayed(self.getWeights)(data, i) 
+                                            for i in range(self.numTrees))
+        weights = np.stack(weights, axis = 2)
+        weights = np.sum(weights, axis = 2)/self.numTrees
         
-#        weightSums = np.sum(weights[:,1])
-#        weights = np.apply_along_axis(lambda x: x/weightSums, axis = 1, arr =  weights)
-#        allResults = np.sum(weights*allResults, axis = 1)
-        return np.mean(allResults, axis = 1)
+        numRows = len(data)
+        ITE = Parallel(n_jobs = ncores, backend = 'multiprocessing', verbose = 12)(delayed(self.getITE)(weights, i) 
+                                            for i in range(numRows))
+        return np.array(ITE)
+    
+#    
+#    def predict(self, data):
+#        assert self.fitted
+#        numRows = len(data)
+#        allResults = np.zeros((numRows, self.numTrees))
+#        
+#        for i in range(self.numTrees):
+#            results, totals = self.trees[i].predict(data)
+#            allResults[:,i] = results
+#
+#        return np.mean(allResults, axis = 1)
+    
     
     def getNumLeaves(self):
         numLeaves = 0
@@ -212,16 +251,24 @@ class Root(object):
         ## free memory
         self.data, self.ID, self.intervention, self.outcomes = None, None, None, None
     
+#    def predict(self, data):
+#        self.data = data
+#        self.numRows = len(data)
+#        self.ID = np.arange(self.numRows)
+#        self.results = np.zeros(self.numRows)
+#        self.totals = np.zeros(self.numRows)
+#        self.tree.predict(self.ID)
+#        ## free memory
+#        self.data, self.numRows, self.ID = None, None, None
+#        return self.results, self.totals
+        
     def predict(self, data):
         self.data = data
-        self.numRows = len(data)
-        self.ID = np.arange(self.numRows)
-        self.results = np.zeros(self.numRows)
-        self.totals = np.zeros(self.numRows)
+        self.ID = np.arange(len(data))
+        self.results = np.zeros((len(data), self.numRows), dtype = np.bool)
         self.tree.predict(self.ID)
-        ## free memory
-        self.data, self.numRows, self.ID = None, None, None
-        return self.results, self.totals
+        return self.results
+        
     
     def getNumLeaves(self):
         self.numLeaves = 0
@@ -250,14 +297,24 @@ class Node(object):
         
         self.fit()
     
+#    def predict(self, rowIndex):
+#        if self.isLeaf:
+#            self.root.results[rowIndex] = self.leafValue
+#        else:
+#            L_ID, R_ID = self.splitIDs(rowIndex)
+#            self.leftChild.predict(L_ID)
+#            self.rightChild.predict(R_ID)
+        
     def predict(self, rowIndex):
         if self.isLeaf:
-            self.root.results[rowIndex] = self.leafValue
+            for i in range(len(rowIndex)):
+                self.root.results[rowIndex[i],self.leafValue] = True
         else:
             L_ID, R_ID = self.splitIDs(rowIndex)
             self.leftChild.predict(L_ID)
             self.rightChild.predict(R_ID)
-    
+            
+            
     def countLeaf(self):
         if self.isLeaf:
             self.root.numLeaves += 1
@@ -267,6 +324,7 @@ class Node(object):
     
     def splitIDs(self, rowIndex):
         data, ID = self.root.data[rowIndex,self.column], self.root.ID[rowIndex]
+        data = self.impute(copy(data), self.column)
         L_select = data <= self.splitPoint
         R_select = np.logical_not(L_select)
         L_ID, R_ID = ID[L_select], ID[R_select]
@@ -274,12 +332,12 @@ class Node(object):
     
     def makeLeaf(self):
         self.isLeaf = True
-        outcomes = self.root.outcomes[self.rowIndex,...]
-        intervention = self.root.intervention[self.rowIndex]
-        model = SurvStats(outcomes, intervention)
-
-        self.leafValue = model.getRMSTdiff()
-        self.leafTotal = model.totalC + model.totalT
+#        outcomes = self.root.outcomes[self.rowIndex,...]
+#        intervention = self.root.intervention[self.rowIndex]
+#        model = SurvStats(outcomes, intervention)
+        self.leafValue = self.rowIndex
+#        self.leafValue = model.getRMSTdiff(7)
+#        self.leafTotal = model.totalC + model.totalT
         
     
     def fit(self):
@@ -299,7 +357,9 @@ class Node(object):
         if len(self.rowIndex) >= self.root.minGroup*4 + 1:
             
             ## evaluate numTry random subspaces
+            #numTry = 5
             colIndices = np.arange(self.root.numColumns)
+            #colIndices = np.random.permutation(colIndices)[:numTry]
             if np.random.uniform() < self.root.alpha:
                 numTry = self.root.numColumns
             
@@ -342,7 +402,7 @@ class Node(object):
     ## sorts a continuous predictor in ascending order for the purpose of linear search for split points
     def returnSorted(self, colIndex):
         ## only to be used for continuous features
-        subData = self.impute(copy(self.root.data[self.rowIndex,colIndex]))
+        subData = self.impute(copy(self.root.data[self.rowIndex,colIndex]), colIndex)
         sortIndex = np.argsort(subData)
         subData = subData[sortIndex]
         intervention = self.root.intervention[self.rowIndex][sortIndex]
@@ -350,7 +410,7 @@ class Node(object):
         return subData, intervention, outcomes
 
     def minSize(self, L_model, R_model):
-        return np.min([L_model.totalC, L_model.totalT, R_model.totalC, R_model.totalT])
+        return np.min([L_model.deathsC, L_model.deathsT, R_model.deathsC, R_model.deathsT])
     
     def impute(self, data, colIndex):
         needsImpute = np.isnan(data)
@@ -362,8 +422,16 @@ class Node(object):
         data[needsImpute] = val
         return data
     
+    def evaluate(self, L_model, R_model):
+        L_m, R_m = (L_model.totalC + L_model.totalT), (R_model.totalC + R_model.totalT)
+        m = L_m + R_m
+        L_area = L_model.getRMSTdiff(tau = 7)*L_m/m
+        R_area = R_model.getRMSTdiff(tau = 7)*R_m/m
+        return abs(L_area) + abs(R_area)
+        
+    
     def splitBinary(self, colIndex):
-        subData = self.impute(copy(self.root.data[self.rowIndex,colIndex]))
+        subData = self.impute(copy(self.root.data[self.rowIndex,colIndex]), colIndex)
         intervention = self.root.intervention[self.rowIndex]
         outcomes = self.root.outcomes[self.rowIndex]
     
@@ -390,9 +458,7 @@ class Node(object):
             
                 ## make sure subgroups are of min size
                 if self.minSize(L_model, R_model) > self.root.minGroup:
-                    m = len(self.rowIndex)
-                    performance = abs(L_model.getStatistic())*(L_model.totalC + L_model.totalT)/m
-                    performance += abs(R_model.getStatistic())*(R_model.totalC + R_model.totalT)/m
+                    performance = self.evaluate(L_model, R_model)
                     # make sure performance is good enough
                     #if stats.norm.sf(potentialPerformance) <= self.root.pval:
                     performance *= (self.maximize*2 - 1)
@@ -403,9 +469,9 @@ class Node(object):
     def splitContinuous(self, colIndex):
         reg = self.root.minGroup*2
         subData, intervention, outcomes = self.returnSorted(colIndex)
-        split = np.random.uniform(subData[reg], subData[-reg])
-        #split_b = np.random.uniform(subData[reg], subData[-reg])
-        #split = (split_a + split_b)/2
+        split_a = np.random.uniform(subData[reg], subData[-reg])
+        split_b = np.random.uniform(subData[reg], subData[-reg])
+        split = (split_a + split_b)/2
     
         L_split = subData <= split
         R_split = np.logical_not(L_split)
@@ -423,9 +489,7 @@ class Node(object):
             R_model = SurvStats(R_outcomes, R_intervention)
         
             if self.minSize(L_model, R_model) > self.root.minGroup:
-                m = len(self.rowIndex)
-                performance = abs(L_model.getStatistic())*(L_model.totalC + L_model.totalT)/m
-                performance += abs(R_model.getStatistic())*(R_model.totalC + R_model.totalT)/m
+                performance = self.evaluate(L_model, R_model)
                 performance = performance*(2*self.maximize - 1)
                             
         return performance, split
