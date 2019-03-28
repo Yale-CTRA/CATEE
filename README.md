@@ -1,1 +1,1 @@
-A collection of Conditional Average Treatment Effect (CATE) estimators for standard (classification/regression) and survival datasets
+A collection of Conditional Average Treatment Effect Estimators (CATEE) for standard (classification/regression) and survival datasets
