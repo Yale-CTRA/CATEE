@@ -1,1 +1,1 @@
-A collection of Individual Treatment Effect (ITE) estimators for standard (classification/regression) and survival datasets
+A collection of Conditional Average Treatment Effect (CATE) estimators for standard (classification/regression) and survival datasets
