@@ -15,8 +15,8 @@ import numpy as np
 class TLearner(object):
     def __init__(self, alpha = 0.01):
         super().__init__()
-        self.modelT = Ridge(alpha = alpha)
-        self.modelC = Ridge(alpha = alpha)
+        self.modelT = LogisticRegression(alpha = alpha)
+        self.modelC = LogisticRegression(alpha = alpha)
         self.fitted = False
              
         
@@ -28,7 +28,7 @@ class TLearner(object):
         
     def predict(self, X, switch = False):
         assert self.fitted
-        delta = self.modelT.predict(X) - self.modelC.predict(X)
+        delta = self.modelT.predict_proba(X) - self.modelC.predict_proba(X)
         
         # want to target people with high negative values
         delta = delta if switch else -delta
@@ -37,8 +37,8 @@ class TLearner(object):
 class XLearner(TLearner):
     def __init__(self, alpha = 0.01):
         super().__init__()
-        self.modelTX = Ridge(alpha = alpha)
-        self.modelCX = Ridge(alpha = alpha)
+        self.modelTX = LogisticRegression(alpha = alpha)
+        self.modelCX = LogisticRegression(alpha = alpha)
         self.propensity = LogisticRegression()
         
     def __propensityFit(self, Xt, Xc):
@@ -50,8 +50,8 @@ class XLearner(TLearner):
         self.__propensityFit(Xt, Xc)
         self.modelT.fit(Xt, Yt)
         self.modelC.fit(Xc, Yc)
-        Rt = Yt -self.modelC.predict(Xt)
-        Rc = self.modelT.predict(Xc) - Yc
+        Rt = Yt -self.modelC.predict_proba(Xt)
+        Rc = self.modelT.predict_proba(Xc) - Yc
         self.modelTX.fit(Xt, Rt)
         self.modelCX.fit(Xc, Rc)
         self.fitted = True
@@ -59,7 +59,7 @@ class XLearner(TLearner):
     def predict(self, X, switch = False):
         assert self.fitted
         weight = self.propensity.predict_proba(X)
-        delta = weight[:,1]*self.modelTX.predict(X) + weight[:,0]*self.modelCX.predict(X)
+        delta = weight[:,1]*self.modelTX.predict_proba(X) + weight[:,0]*self.modelCX.predict_proba(X)
         
         # want to target people with high negative values
         delta = delta if switch else -delta
@@ -69,7 +69,7 @@ class XLearner(TLearner):
 class ZLearner(object):
     def __init__(self, alpha = 0.01):
         super().__init__()
-        self.model = Ridge(alpha = alpha)
+        self.model = LogisticRegression(alpha = alpha)
         
     def fit(self, X, Y, A):
         Xt, Xc, Yt, Yc = X[A], X[~A], Y[A], Y[~A]
@@ -79,7 +79,7 @@ class ZLearner(object):
     
     def predict(self, X, switch = False):
         assert self.fitted
-        delta = self.model.predict(X)
+        delta = self.model.predict_proba(X)
         # want to target people with high negative values
         delta = delta if switch else -delta
         return delta
@@ -88,7 +88,7 @@ class ZLearner(object):
 class ProgLearner(object):
     def __init__(self, alpha = 0.01):
         super().__init__()
-        self.model = Ridge(alpha = alpha)
+        self.model = LogisticRegression(alpha = alpha)
         
     def fit(self, X, Y, A):
         self.model.fit(X, Y)
@@ -96,6 +96,6 @@ class ProgLearner(object):
     
     def predict(self, X, switch = False):
         assert self.fitted
-        delta = self.model.predict(X)
+        delta = self.model.predict_proba(X)
         # want to target people with high negative values
         return delta
