@@ -67,22 +67,30 @@ class XLearner(TLearner):
     
     
 class ZLearner(object):
-    def __init__(self, alpha = 0.01):
+    def __init__(self, model, **kwargs):
         super().__init__()
-        self.model = LogisticRegression(alpha = alpha)
+        self.model = model(**kwargs)
         
     def fit(self, X, Y, A):
         Xt, Xc, Yt, Yc = X[A], X[~A], Y[A], Y[~A]
-        X, Y = np.concatenate((Xt, Xc)), np.concatenate((Yt, -Yc))
+        X, Y = np.concatenate((Xt, Xc)), np.concatenate((Yt, ~Yc))
         self.model.fit(X, Y)
         self.fitted = True
     
+    def predict_proba(self, X, switch = False):
+        assert self.fitted
+        delta = self.model.predict_proba(X)[:,1]
+        # want to target people with high negative values
+        delta = 1-delta if switch else delta
+        return delta
+    
     def predict(self, X, switch = False):
         assert self.fitted
-        delta = self.model.predict_proba(X)
+        delta = self.model.predict(X)
         # want to target people with high negative values
-        delta = delta if switch else -delta
+        delta = 1-delta if switch else delta
         return delta
+    
 
 
 class ProgLearner(object):
